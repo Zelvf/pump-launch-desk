@@ -1,0 +1,23 @@
+{
+  "name": "personal-pump-launchpad",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && node --watch server.js",
+    "start": "node server.js",
+    "build": "esbuild public/app.js --bundle --platform=browser --format=iife --outfile=public/bundle.js --define:global=globalThis",
+    "check": "node --check server.js && node --check public/app.js"
+  },
+  "dependencies": {
+    "@pump-fun/pump-sdk": "4.1.0",
+    "@solana/web3.js": "^1.98.2",
+    "bn.js": "^5.2.2",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "multer": "^2.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
