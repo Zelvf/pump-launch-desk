@@ -6,9 +6,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } from '@solana/web3.js';
-import { PumpSdk, OnlinePumpSdk, PUMP_PROGRAM_ID, getBuyTokenAmountFromSolAmount } from '@pump-fun/pump-sdk';
+import * as pumpModule from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
 import { get, list, put } from '@vercel/blob';
+
+const { PumpSdk, OnlinePumpSdk, PUMP_PROGRAM_ID, getBuyTokenAmountFromSolAmount } = pumpModule.default || pumpModule;
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(root, 'data', 'tokens.json');
