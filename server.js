@@ -3,14 +3,15 @@ import express from 'express';
 import multer from 'multer';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } from '@solana/web3.js';
-import * as pumpModule from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
 import { get, list, put } from '@vercel/blob';
 
-const { PumpSdk, OnlinePumpSdk, PUMP_PROGRAM_ID, getBuyTokenAmountFromSolAmount } = pumpModule.default || pumpModule;
+const require = createRequire(import.meta.url);
+const { PumpSdk, OnlinePumpSdk, PUMP_PROGRAM_ID, getBuyTokenAmountFromSolAmount } = require('@pump-fun/pump-sdk');
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(root, 'data', 'tokens.json');
