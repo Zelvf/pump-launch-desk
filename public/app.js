@@ -9,6 +9,30 @@ async function api(url, options = {}) {
   if (!res.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
+function prepareLaunch(form, status) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/prepare');
+    request.withCredentials = true;
+    request.timeout = 180_000;
+    request.upload.onprogress = event => {
+      if (event.lengthComputable && event.loaded < event.total) {
+        status.textContent = `Sending image… ${Math.round(event.loaded / event.total * 100)}%`;
+      }
+    };
+    request.upload.onload = () => { status.textContent = 'Image sent. Pinning image and metadata, then preparing transaction…'; };
+    request.onload = () => {
+      let data;
+      try { data = JSON.parse(request.responseText); }
+      catch { reject(new Error(`Launch preparation failed (HTTP ${request.status}).`)); return; }
+      if (request.status < 200 || request.status >= 300) reject(new Error(data.error || `Launch preparation failed (HTTP ${request.status}).`));
+      else resolve(data);
+    };
+    request.onerror = () => reject(new Error('Connection lost while preparing the launch. Check your internet connection and try again.'));
+    request.ontimeout = () => reject(new Error('Launch preparation took over three minutes. Check your connection and try again.'));
+    request.send(form);
+  });
+}
 function showApp(yes) { $('loginView').hidden = yes; $('appView').hidden = !yes; $('logout').hidden = !yes; if (yes) { loadTokens(); recoverPending(); } }
 async function loadTokens() {
   try {
@@ -58,8 +82,8 @@ $('launchForm').addEventListener('submit', async e => {
   const button = $('launchButton'); button.disabled = true;
   try {
     const form = new FormData(e.currentTarget); form.set('wallet', wallet.publicKey.toBase58()); form.set('mayhemMode', String(form.has('mayhemMode'))); form.set('holderReward', String(form.has('holderReward')));
-    status.textContent = 'Uploading image and metadata to Pinata…';
-    const prepared = await api('/api/prepare', { method: 'POST', body: form });
+    status.textContent = 'Sending image to Launch Desk…';
+    const prepared = await prepareLaunch(form, status);
     status.textContent = 'Review and sign the launch in your wallet…';
     const bytes = Uint8Array.from(atob(prepared.transaction), c => c.charCodeAt(0));
     const tx = VersionedTransaction.deserialize(bytes);

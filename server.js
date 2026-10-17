@@ -113,9 +113,15 @@ async function uploadPublicFile(buffer, mime, name, label) {
   const form = new FormData();
   form.append('network', 'public');
   form.append('file', new Blob([buffer], { type: mime }), name);
-  const response = await fetch('https://uploads.pinata.cloud/v3/files', {
-    method: 'POST', headers: { Authorization: `Bearer ${process.env.PINATA_JWT}` }, body: form
-  });
+  let response;
+  try {
+    response = await fetch('https://uploads.pinata.cloud/v3/files', {
+      method: 'POST', headers: { Authorization: `Bearer ${process.env.PINATA_JWT}` }, body: form, signal: AbortSignal.timeout(60_000)
+    });
+  } catch (error) {
+    if (error.name === 'TimeoutError') throw new Error(`Pinata ${label} upload timed out after one minute.`);
+    throw error;
+  }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.data?.cid) throw new Error(`Pinata ${label} upload failed: ${result.error?.details || result.error?.reason || response.status}`);
   return `https://gateway.pinata.cloud/ipfs/${result.data.cid}`;
@@ -174,8 +180,13 @@ app.post('/api/prepare', auth, upload.single('image'), async (req, res, next) =>
     const telegram = optionalUrl(req.body.telegram, 'Telegram');
     const mayhemMode = req.body.mayhemMode === 'true';
     const holderReward = req.body.holderReward === 'true';
+    const startedAt = Date.now();
+    const logStage = stage => console.info(`Launch preparation: ${stage} after ${Date.now() - startedAt}ms`);
+    logStage(`received ${req.file.size} image bytes`);
     const image = await pinFile(req.file.buffer, req.file.mimetype, req.file.originalname);
+    logStage('image pinned');
     const metadataUri = await pinJson({ name, symbol, description, image, external_url: website, twitter, telegram, website, showName: true });
+    logStage('metadata pinned');
     const mint = Keypair.generate();
     const base = { mint: mint.publicKey, name, symbol, uri: metadataUri, creator: wallet, user: wallet, mayhemMode, holderReward, ...(quoteMint ? { quoteMint } : {}) };
     let instructions;
@@ -187,9 +198,11 @@ app.post('/api/prepare', auth, upload.single('image'), async (req, res, next) =>
     }
     if (priorityFee) instructions.unshift(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }));
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+    logStage('blockhash fetched');
     const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: wallet, recentBlockhash: blockhash, instructions }).compileToV0Message());
     transaction.sign([mint]);
     await saveRecord({ mint: mint.publicKey.toBase58(), wallet: wallet.toBase58(), name, symbol, description, image, metadataUri, quote, initialBuy: req.body.initialBuy || '0', mayhemMode, holderReward, status: 'prepared', createdAt: new Date().toISOString() });
+    logStage('transaction prepared');
     res.json({ mint: mint.publicKey.toBase58(), transaction: Buffer.from(transaction.serialize()).toString('base64'), blockhash, lastValidBlockHeight });
   } catch (e) { next(e); }
 });
