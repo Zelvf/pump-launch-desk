@@ -4,3 +4,6 @@ data/
 *.log
 public/bundle.js
 .playwright-cli/
+
+.vercel/
+.env.local
