@@ -18,7 +18,7 @@ The app binds to `127.0.0.1` for personal use. The saved token file is local to 
 
 1. Import the repository into Vercel. The `npm run build` script generates `public/bundle.js` during deployment.
 2. Create a **private** Vercel Blob store and connect it to the project. It supplies `BLOB_READ_WRITE_TOKEN` for persistent launch records.
-3. Set `APP_PASSWORD`, `PINATA_JWT`, and optionally `SOLANA_RPC_URL` in the project's Production environment variables, then deploy. Use a long, unique password. `PORT` is only for local use.
+3. Set `APP_PASSWORD`, `PINATA_JWT`, and optionally `SOLANA_RPC_URL` in the project's Production environment variables, then deploy. The Pinata key must allow Files write access for public uploads. Use a long, unique password. `PORT` is only for local use.
 
 Sessions use signed, seven-day cookies. Logging out clears the browser cookie; changing `APP_PASSWORD` invalidates all existing sessions. The deployment requires HTTPS and limits image uploads to 4 MB to fit Vercel's request limit. Local `data/tokens.json` records are not automatically migrated to Blob storage.
 

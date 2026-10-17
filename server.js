@@ -109,24 +109,22 @@ function decimalUnits(value, decimals, label) {
   if (fraction.length > decimals) throw new Error(`${label} has too many decimal places.`);
   return new BN(whole).mul(new BN(10).pow(new BN(decimals))).add(new BN(fraction.padEnd(decimals, '0') || '0'));
 }
-async function pinFile(buffer, mime, name) {
+async function uploadPublicFile(buffer, mime, name, label) {
   const form = new FormData();
+  form.append('network', 'public');
   form.append('file', new Blob([buffer], { type: mime }), name);
-  const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+  const response = await fetch('https://uploads.pinata.cloud/v3/files', {
     method: 'POST', headers: { Authorization: `Bearer ${process.env.PINATA_JWT}` }, body: form
   });
-  const result = await response.json();
-  if (!response.ok || !result.IpfsHash) throw new Error(`Pinata image upload failed: ${result.error?.message || response.status}`);
-  return `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`;
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.data?.cid) throw new Error(`Pinata ${label} upload failed: ${result.error?.details || result.error?.reason || response.status}`);
+  return `https://gateway.pinata.cloud/ipfs/${result.data.cid}`;
+}
+async function pinFile(buffer, mime, name) {
+  return uploadPublicFile(buffer, mime, name, 'image');
 }
 async function pinJson(content) {
-  const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
-    method: 'POST', headers: { Authorization: `Bearer ${process.env.PINATA_JWT}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pinataContent: content, pinataMetadata: { name: `${content.symbol}-metadata.json` } })
-  });
-  const result = await response.json();
-  if (!response.ok || !result.IpfsHash) throw new Error(`Pinata metadata upload failed: ${result.error?.message || response.status}`);
-  return `https://gateway.pinata.cloud/ipfs/${result.IpfsHash}`;
+  return uploadPublicFile(Buffer.from(JSON.stringify(content)), 'application/json', `${content.symbol}-metadata.json`, 'metadata');
 }
 
 app.post('/api/login', (req, res) => {
