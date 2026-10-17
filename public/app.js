@@ -54,6 +54,7 @@ $('connectWallet').addEventListener('click', async () => { const provider = wind
 $('launchForm').addEventListener('submit', async e => {
   e.preventDefault(); const status = $('launchStatus');
   if (!wallet?.publicKey) { status.textContent = 'Connect your wallet first.'; return; }
+  if ($('image').files[0]?.size > 4 * 1024 * 1024) { status.textContent = 'Choose an image under 4 MB.'; return; }
   const button = $('launchButton'); button.disabled = true;
   try {
     const form = new FormData(e.currentTarget); form.set('wallet', wallet.publicKey.toBase58()); form.set('mayhemMode', String(form.has('mayhemMode'))); form.set('holderReward', String(form.has('holderReward')));

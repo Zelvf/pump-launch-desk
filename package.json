@@ -12,6 +12,7 @@
   "dependencies": {
     "@pump-fun/pump-sdk": "4.1.0",
     "@solana/web3.js": "^1.98.2",
+    "@vercel/blob": "^2.8.2",
     "bn.js": "^5.2.2",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",

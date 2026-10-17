@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Connection, PublicKey, Keypair, TransactionMessage, VersionedTransaction, ComputeBudgetProgram } from '@solana/web3.js';
 import { PumpSdk, OnlinePumpSdk, PUMP_PROGRAM_ID, getBuyTokenAmountFromSolAmount } from '@pump-fun/pump-sdk';
 import BN from 'bn.js';
+import { get, list, put } from '@vercel/blob';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = path.join(root, 'data', 'tokens.json');
@@ -16,11 +17,13 @@ const rpcUrl = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.co
 const connection = new Connection(rpcUrl, 'confirmed');
 const sdk = new PumpSdk();
 const onlineSdk = new OnlinePumpSdk(connection);
-const sessionKey = crypto.randomBytes(32);
-const sessions = new Map();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+const sessionLifetime = 7 * 86400_000;
+const blobEnabled = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
+if (process.env.VERCEL && !blobEnabled) throw new Error('Connect a private Vercel Blob store to this project.');
 
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '40kb' }));
 app.use(express.static(path.join(root, 'public')));
 
@@ -33,9 +36,17 @@ app.use('/api', sameOrigin);
 
 function auth(req, res, next) {
   const token = /(?:^|; )session=([^;]+)/.exec(req.headers.cookie || '')?.[1];
-  const expiry = token && sessions.get(token);
-  if (!expiry || expiry < Date.now()) return res.status(401).json({ error: 'Please log in.' });
+  if (!validSession(token)) return res.status(401).json({ error: 'Please log in.' });
   next();
+}
+function sessionSignature(payload) {
+  return crypto.createHmac('sha256', process.env.APP_PASSWORD || '').update(`launch-desk-session:${payload}`).digest('base64url');
+}
+function validSession(token) {
+  if (!process.env.APP_PASSWORD || typeof token !== 'string') return false;
+  const [expiry, nonce, signature, extra] = token.split('.');
+  if (extra || !/^\d{13}$/.test(expiry || '') || !/^[a-f0-9]{32}$/.test(nonce || '') || !/^[A-Za-z0-9_-]{43}$/.test(signature || '') || Number(expiry) < Date.now()) return false;
+  return safeEqual(signature, sessionSignature(`${expiry}.${nonce}`));
 }
 function safeEqual(a, b) {
   const x = crypto.createHash('sha256').update(a).digest();
@@ -43,14 +54,41 @@ function safeEqual(a, b) {
   return crypto.timingSafeEqual(x, y);
 }
 async function readDb() {
+  if (blobEnabled) {
+    const records = [];
+    let cursor;
+    do {
+      const page = await list({ prefix: 'launches/', cursor, limit: 1000 });
+      for (const blob of page.blobs) {
+        const result = await get(blob.pathname, { access: 'private', useCache: false });
+        if (result?.statusCode === 200) records.push(await new Response(result.stream).json());
+      }
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+    return records;
+  }
   try { return JSON.parse(await fs.readFile(dbPath, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
-async function writeDb(records) {
+async function saveRecord(record) {
+  if (blobEnabled) {
+    await put(`launches/${record.mint}.json`, JSON.stringify(record), { access: 'private', allowOverwrite: true, contentType: 'application/json' });
+    return;
+  }
+  const records = await readDb();
+  const index = records.findIndex(x => x.mint === record.mint);
+  if (index < 0) records.push(record); else records[index] = record;
   await fs.mkdir(path.dirname(dbPath), { recursive: true });
   const temp = `${dbPath}.${process.pid}.tmp`;
   await fs.writeFile(temp, JSON.stringify(records, null, 2));
   await fs.rename(temp, dbPath);
+}
+async function readRecord(mint) {
+  if (blobEnabled) {
+    const result = await get(`launches/${mint}.json`, { access: 'private', useCache: false });
+    return result?.statusCode === 200 ? new Response(result.stream).json() : null;
+  }
+  return (await readDb()).find(x => x.mint === mint) || null;
 }
 function requiredString(value, max, label) {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > max) throw new Error(`${label} is required (max ${max} characters).`);
@@ -90,14 +128,12 @@ async function pinJson(content) {
 
 app.post('/api/login', (req, res) => {
   if (!process.env.APP_PASSWORD || !safeEqual(String(req.body.password || ''), process.env.APP_PASSWORD)) return res.status(401).json({ error: 'Incorrect password.' });
-  const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, Date.now() + 7 * 86400_000);
-  res.cookie('session', token, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 7 * 86400_000, path: '/' });
+  const payload = `${Date.now() + sessionLifetime}.${crypto.randomBytes(16).toString('hex')}`;
+  const token = `${payload}.${sessionSignature(payload)}`;
+  res.cookie('session', token, { httpOnly: true, sameSite: 'strict', secure: req.secure || Boolean(process.env.VERCEL), maxAge: sessionLifetime, path: '/' });
   res.json({ ok: true });
 });
 app.post('/api/logout', auth, (req, res) => {
-  const token = /(?:^|; )session=([^;]+)/.exec(req.headers.cookie || '')?.[1];
-  sessions.delete(token);
   res.clearCookie('session', { path: '/' });
   res.json({ ok: true });
 });
@@ -119,8 +155,8 @@ app.get('/api/metrics', auth, async (req, res, next) => {
 
 app.post('/api/prepare', auth, upload.single('image'), async (req, res, next) => {
   try {
-    if (!process.env.PINATA_JWT) throw new Error('Set PINATA_JWT in .env first.');
-    if (!req.file || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(req.file.mimetype)) throw new Error('Choose a PNG, JPEG, WebP, or GIF image under 5 MB.');
+    if (!process.env.PINATA_JWT) throw new Error('Set PINATA_JWT first.');
+    if (!req.file || !['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(req.file.mimetype)) throw new Error('Choose a PNG, JPEG, WebP, or GIF image under 4 MB.');
     const name = requiredString(req.body.name, 32, 'Name');
     const symbol = requiredString(req.body.symbol, 13, 'Symbol');
     const description = requiredString(req.body.description, 1000, 'Description');
@@ -152,9 +188,7 @@ app.post('/api/prepare', auth, upload.single('image'), async (req, res, next) =>
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
     const transaction = new VersionedTransaction(new TransactionMessage({ payerKey: wallet, recentBlockhash: blockhash, instructions }).compileToV0Message());
     transaction.sign([mint]);
-    const records = await readDb();
-    records.push({ mint: mint.publicKey.toBase58(), wallet: wallet.toBase58(), name, symbol, description, image, metadataUri, quote, initialBuy: req.body.initialBuy || '0', mayhemMode, holderReward, status: 'prepared', createdAt: new Date().toISOString() });
-    await writeDb(records);
+    await saveRecord({ mint: mint.publicKey.toBase58(), wallet: wallet.toBase58(), name, symbol, description, image, metadataUri, quote, initialBuy: req.body.initialBuy || '0', mayhemMode, holderReward, status: 'prepared', createdAt: new Date().toISOString() });
     res.json({ mint: mint.publicKey.toBase58(), transaction: Buffer.from(transaction.serialize()).toString('base64'), blockhash, lastValidBlockHeight });
   } catch (e) { next(e); }
 });
@@ -162,8 +196,7 @@ app.post('/api/confirm', auth, async (req, res, next) => {
   try {
     const mint = new PublicKey(String(req.body.mint)).toBase58();
     const signature = requiredString(req.body.signature, 100, 'Signature');
-    const records = await readDb();
-    const record = records.find(x => x.mint === mint);
+    const record = await readRecord(mint);
     if (!record) return res.status(404).json({ error: 'Prepared launch not found.' });
     const tx = await connection.getTransaction(signature, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
     if (!tx || tx.meta?.err) throw new Error('Transaction is not confirmed successfully yet. Try again shortly.');
@@ -172,7 +205,7 @@ app.post('/api/confirm', auth, async (req, res, next) => {
     record.status = 'confirmed';
     record.signature = signature;
     record.confirmedAt = new Date().toISOString();
-    await writeDb(records);
+    await saveRecord(record);
     res.json(record);
   } catch (e) { next(e); }
 });
@@ -181,5 +214,8 @@ app.use((error, _req, res, _next) => {
   res.status(error.status || 400).json({ error: error.message || 'Request failed.' });
 });
 
-const port = Number(process.env.PORT || 3333);
-app.listen(port, '127.0.0.1', () => console.log(`Personal launchpad: http://127.0.0.1:${port}`));
+if (!process.env.VERCEL) {
+  const port = Number(process.env.PORT || 3333);
+  app.listen(port, '127.0.0.1', () => console.log(`Personal launchpad: http://127.0.0.1:${port}`));
+}
+export default app;
